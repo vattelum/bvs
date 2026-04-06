@@ -220,12 +220,11 @@
 	{:else}
 		{#if sections.length === 0}
 			<div class="text-center py-8">
-				<p class="text-text-muted text-sm mb-3">No sections yet.</p>
 				<button
 					onclick={addTopLevel}
 					class="text-sm px-4 py-1.5 rounded bg-primary hover:bg-primary-hover text-text transition-colors cursor-pointer"
 				>
-					Add first section
+					Add new section
 				</button>
 			</div>
 		{:else}

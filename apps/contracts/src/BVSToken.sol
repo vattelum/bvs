@@ -3,13 +3,14 @@ pragma solidity ^0.8.29;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC5192} from "./interfaces/IERC5192.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
 
 /// @title BVSToken — Soulbound Membership Token
 /// @notice ERC-721 + ERC-5192 non-transferable membership token with identity credentials
 ///         and an optional pluggable verifier gate. Admin-only minting in BVS mode.
-contract BVSToken is ERC721, Ownable, IERC5192 {
+contract BVSToken is ERC721, Ownable, ReentrancyGuard, IERC5192 {
     // ──────────────────────── Constants ────────────────────────
 
     bytes4 private constant _IERC5192_INTERFACE_ID = 0xb45a3c0e;
@@ -73,7 +74,7 @@ contract BVSToken is ERC721, Ownable, IERC5192 {
     /// @notice Burn a membership token. Holder can always burn their own.
     ///         Admin can burn any token if adminCanBurn is enabled.
     /// @param tokenId The token to burn.
-    function burn(uint256 tokenId) external {
+    function burn(uint256 tokenId) external nonReentrant {
         address holder = ownerOf(tokenId);
         bool isHolder = holder == msg.sender;
         bool isAdmin = adminCanBurn && msg.sender == owner();

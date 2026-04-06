@@ -60,6 +60,7 @@
 	let selectedTargetSections = $state<string[]>([]);
 	let availableTargetSections = $state<TargetSectionInfo[]>([]);
 	let allParsedSections = $state<Section[]>([]);
+	let newSectionsOnly = $state(false);
 	let loadingTargetDoc = $state(false);
 	let targetDocError = $state('');
 	let targetDocTitle = $state('');
@@ -224,6 +225,7 @@
 		selectedTargetSections = [];
 		availableTargetSections = [];
 		allParsedSections = [];
+		newSectionsOnly = false;
 		targetDocError = '';
 		targetDocTitle = '';
 		repealReason = '';
@@ -356,6 +358,7 @@
 		selectedTargetSections = [];
 		availableTargetSections = [];
 		allParsedSections = [];
+		newSectionsOnly = false;
 		targetDocError = '';
 		targetDocTitle = '';
 		loadVersionsForCategory(newCatId);
@@ -371,6 +374,7 @@
 			selectedTargetSections = [];
 			availableTargetSections = [];
 			allParsedSections = [];
+			newSectionsOnly = false;
 			targetDocError = '';
 			targetDocTitle = '';
 			repealReason = '';
@@ -382,6 +386,7 @@
 			selectedTargetSections = [];
 			availableTargetSections = [];
 			allParsedSections = [];
+			newSectionsOnly = false;
 			repealReason = '';
 			if (targetDocTitle) {
 				const targetVer = categoryVersions.find((v) => v.version === selectedRefs[0]);
@@ -393,6 +398,7 @@
 
 		if (supportsSectionTargeting(prevDocType) && supportsSectionTargeting(newDocType) && selectedRefs.length === 1) {
 			selectedTargetSections = [];
+			newSectionsOnly = false;
 			repealReason = '';
 			updateTitle();
 			sections = allParsedSections.map((s, i) => {
@@ -410,6 +416,7 @@
 		selectedTargetSections = [];
 		availableTargetSections = [];
 		allParsedSections = [];
+		newSectionsOnly = false;
 		targetDocError = '';
 		targetDocTitle = '';
 		repealReason = '';
@@ -429,6 +436,7 @@
 			selectedTargetSections = [];
 			availableTargetSections = [];
 			allParsedSections = [];
+			newSectionsOnly = false;
 			targetDocError = '';
 			targetDocTitle = '';
 			if (!wasSelected && supportsSectionTargeting(docType)) {
@@ -738,6 +746,7 @@
 		selectedTargetSections = [];
 		availableTargetSections = [];
 		allParsedSections = [];
+		newSectionsOnly = false;
 		targetDocError = '';
 		targetDocTitle = '';
 		repealReason = '';
@@ -975,13 +984,14 @@
 								{:else if targetDocError}
 									<p class="text-text-muted text-sm">{targetDocError}</p>
 								{:else if availableTargetSections.length > 0}
-									<div class="flex flex-col gap-1 max-h-48 overflow-y-auto border border-border rounded p-2">
+									<div class="flex flex-col gap-1 max-h-48 overflow-y-auto border border-border rounded p-2 {newSectionsOnly ? 'opacity-40 pointer-events-none' : ''}">
 										{#each availableTargetSections as sec}
-											{@const explicit = selectedTargetSections.includes(sec.number)}
-											{@const implicit = isImplicitlySelected(sec.number)}
+											{@const explicit = !newSectionsOnly && selectedTargetSections.includes(sec.number)}
+											{@const implicit = !newSectionsOnly && isImplicitlySelected(sec.number)}
 											<button
 												type="button"
 												onclick={() => handleSectionToggle(sec.number)}
+												disabled={newSectionsOnly}
 												class="text-left rounded text-sm transition-colors cursor-pointer
 													{explicit ? 'bg-primary/20 border border-primary/40' : implicit ? 'bg-primary/10 border border-primary/20 opacity-60' : 'hover:bg-bg-lighter border border-transparent'}"
 												style="padding: 6px 12px 6px {12 + (sec.depth - 1) * 16}px"
@@ -992,7 +1002,11 @@
 											</button>
 										{/each}
 									</div>
-									{#if selectedTargetSections.length > 0}
+									{#if newSectionsOnly}
+										<p class="text-xs text-text-muted mt-1">
+											Adding new sections only. Use the editor to add clauses.
+										</p>
+									{:else if selectedTargetSections.length > 0}
 										<p class="text-xs text-text-muted mt-1">
 											Targeting {sortedSelectedSections().map(s => '\u00A7' + s).join(', ')}{sortedSelectedSections().some(s => availableTargetSections.some(t => t.number.startsWith(s + '.'))) ? ' (and all subsections)' : ''}{isRepealMode() ? '' : ' \u2014 editor loaded with selected sections.'}
 										</p>
@@ -1000,6 +1014,31 @@
 										<p class="text-xs text-text-muted mt-1">
 											All sections loaded. Select specific sections to narrow the scope.
 										</p>
+									{/if}
+									{#if isAmendmentMode()}
+										<label class="flex items-center gap-2 cursor-pointer mt-2">
+											<input
+												type="checkbox"
+												bind:checked={newSectionsOnly}
+												onchange={() => {
+													if (newSectionsOnly) {
+														selectedTargetSections = [];
+														sections = [];
+													} else {
+														sections = allParsedSections.map((s, i) => {
+															const sec = createSection(s.depth);
+															sec.title = s.title;
+															sec.content = s.content;
+															sec.fixedNumber = computeSectionNumber(allParsedSections, i).replace('§', '');
+															return sec;
+														});
+													}
+													updateTitle();
+												}}
+												class="accent-primary"
+											/>
+											<span class="text-sm text-text-secondary">Add new section instead</span>
+										</label>
 									{/if}
 								{/if}
 							</div>

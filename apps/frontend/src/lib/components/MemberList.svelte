@@ -12,9 +12,15 @@
 		tokenId: bigint;
 	}
 
+	const PAGE_SIZE = 25;
+
 	let members = $state<Member[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+	let page = $state(1);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(members.length / PAGE_SIZE)));
+	let pagedMembers = $derived(members.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
 
 	const mintEvent = parseAbiItem('event Minted(address indexed to, uint256 indexed tokenId)');
 	const burnEvent = parseAbiItem('event Burned(address indexed from, uint256 indexed tokenId)');
@@ -30,22 +36,26 @@
 			const cached = getCachedMembers();
 			const fromBlock = cached ? BigInt(cached.lastBlock) + 1n : deployBlock;
 
-			const [mintLogs, burnLogs] = await Promise.all([
+			const [mintResult, burnResult] = await Promise.all([
 				getPaginatedLogs(client, {
 					address: bvsTokenAddress,
 					event: mintEvent,
 					fromBlock
-				}),
+				}, 'members:mint'),
 				getPaginatedLogs(client, {
 					address: bvsTokenAddress,
 					event: burnEvent,
 					fromBlock
-				})
+				}, 'members:burn')
 			]);
+
+			if (!mintResult.complete || !burnResult.complete) {
+				console.warn('[members] Scan incomplete — showing partial results');
+			}
 
 			const allMinted = [
 				...(cached?.minted ?? []),
-				...mintLogs.map((log: any) => ({
+				...mintResult.logs.map((log: any) => ({
 					address: log.args.to as string,
 					tokenId: log.args.tokenId.toString()
 				}))
@@ -53,12 +63,13 @@
 
 			const allBurned = new Set([
 				...(cached?.burned ?? []),
-				...burnLogs.map((log: any) => log.args.tokenId.toString())
+				...burnResult.logs.map((log: any) => log.args.tokenId.toString())
 			]);
 
-			const currentBlock = await client.getBlockNumber();
+			const lastBlock = mintResult.lastScannedBlock < burnResult.lastScannedBlock
+				? mintResult.lastScannedBlock : burnResult.lastScannedBlock;
 			setCachedMembers({
-				lastBlock: currentBlock.toString(),
+				lastBlock: lastBlock.toString(),
 				minted: allMinted,
 				burned: [...allBurned]
 			});
@@ -77,6 +88,11 @@
 		loading = true;
 		error = '';
 		loadMembers();
+	}
+
+	export function getTokenId(address: string): bigint | null {
+		const member = members.find(m => m.address.toLowerCase() === address.toLowerCase());
+		return member ? member.tokenId : null;
 	}
 
 	onMount(loadMembers);
@@ -101,7 +117,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each members as member}
+					{#each pagedMembers as member}
 						<tr class="border-b border-border last:border-b-0">
 							<td class="px-4 py-2 font-mono text-text-muted"
 								>#{member.tokenId.toString()}</td
@@ -112,9 +128,26 @@
 				</tbody>
 			</table>
 		</div>
-		<p class="text-text-muted text-xs">
-			{members.length}
-			{members.length === 1 ? 'member' : 'members'}
-		</p>
+		<div class="flex items-center justify-between">
+			<p class="text-text-muted text-xs">
+				{members.length}
+				{members.length === 1 ? 'member' : 'members'}
+			</p>
+			{#if totalPages > 1}
+				<div class="flex items-center gap-2 text-xs">
+					<button
+						onclick={() => page--}
+						disabled={page <= 1}
+						class="px-2 py-1 rounded border border-border hover:bg-bg-lighter text-text-secondary transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+					>&laquo;</button>
+					<span class="text-text-muted">Page {page} of {totalPages}</span>
+					<button
+						onclick={() => page++}
+						disabled={page >= totalPages}
+						class="px-2 py-1 rounded border border-border hover:bg-bg-lighter text-text-secondary transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+					>&raquo;</button>
+				</div>
+			{/if}
+		</div>
 	{/if}
 </div>

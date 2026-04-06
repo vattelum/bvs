@@ -5,11 +5,13 @@ interface WalletState {
 	connected: boolean;
 	connecting: boolean;
 	isAdmin: boolean;
+	isTokenHolder: boolean;
 }
 
 export const wallet = writable<WalletState>({
 	address: null,
 	connected: false,
 	connecting: false,
-	isAdmin: false
+	isAdmin: false,
+	isTokenHolder: false
 });

@@ -2,36 +2,40 @@ import { signMessage, sendTransaction, getConnectorClient } from '@wagmi/core';
 import { config } from '$lib/services/ethereum';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let turbo: any = null;
+let turboPromise: Promise<any> | null = null;
+
+async function initTurbo() {
+	const client = await getConnectorClient(config);
+	if (!client?.account) throw new Error('Wallet not connected');
+
+	const { TurboFactory } = await import('@ardrive/turbo-sdk/web');
+	return TurboFactory.authenticated({
+		walletAdapter: {
+			getSigner: () => ({
+				signMessage: (msg: string | Uint8Array) => {
+					if (typeof msg === 'string') {
+						return signMessage(config, { message: msg });
+					}
+					return signMessage(config, { message: { raw: msg } });
+				},
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				sendTransaction: (tx: any) => sendTransaction(config, tx),
+				provider: client.transport
+			})
+		},
+		token: 'ethereum'
+	});
+}
 
 async function getTurbo() {
-	if (!turbo) {
-		const client = await getConnectorClient(config);
-		if (!client?.account) throw new Error('Wallet not connected');
-
-		const { TurboFactory } = await import('@ardrive/turbo-sdk/web');
-		turbo = TurboFactory.authenticated({
-			walletAdapter: {
-				getSigner: () => ({
-					signMessage: (msg: string | Uint8Array) => {
-						if (typeof msg === 'string') {
-							return signMessage(config, { message: msg });
-						}
-						return signMessage(config, { message: { raw: msg } });
-					},
-					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					sendTransaction: (tx: any) => sendTransaction(config, tx),
-					provider: client.transport
-				})
-			},
-			token: 'ethereum'
-		});
+	if (!turboPromise) {
+		turboPromise = initTurbo();
 	}
-	return turbo;
+	return turboPromise;
 }
 
 export function resetTurbo() {
-	turbo = null;
+	turboPromise = null;
 }
 
 export interface UploadCost {
@@ -53,11 +57,12 @@ export async function getBalance(): Promise<string> {
 
 export async function uploadDocument(content: string): Promise<string> {
 	const client = await getTurbo();
+	const encoded = new TextEncoder().encode(content);
 	const result = await client.upload({
-		data: content,
+		data: encoded,
 		dataItemOpts: {
 			tags: [
-				{ name: 'Content-Type', value: 'text/markdown' },
+				{ name: 'Content-Type', value: 'text/markdown; charset=utf-8' },
 				{ name: 'App-Name', value: 'Vattelum BVS' }
 			]
 		}
@@ -66,6 +71,7 @@ export async function uploadDocument(content: string): Promise<string> {
 }
 
 const GATEWAYS = ['https://arweave.net', 'https://ar-io.dev'];
+const ARWEAVE_TX_REGEX = /^[A-Za-z0-9_-]{43}$/;
 
 export function arweaveUrl(txId: string): string {
 	return `${GATEWAYS[0]}/${txId}`;
@@ -75,6 +81,10 @@ const CACHE_PREFIX = 'bvs:arweave:';
 const CACHE_TS_PREFIX = 'bvs:arweave-ts:';
 
 export async function fetchFromArweave(txId: string, contentHash?: string): Promise<string> {
+	if (!ARWEAVE_TX_REGEX.test(txId)) {
+		throw new Error('Invalid Arweave transaction ID format.');
+	}
+
 	// Check localStorage cache by content hash (immutable — never stale)
 	if (contentHash) {
 		try {

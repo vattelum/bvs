@@ -34,10 +34,11 @@ watchAccount(config, {
 			address: account.address ?? null,
 			connected: account.isConnected,
 			connecting: account.isConnecting,
-			isAdmin: false
+			isAdmin: false,
+			isTokenHolder: false
 		});
 		if (account.address) {
-			checkAdmin(account.address);
+			checkRoles(account.address);
 		}
 	}
 });
@@ -56,17 +57,19 @@ export function getClient() {
 	return getPublicClient(config);
 }
 
-async function checkAdmin(address: `0x${string}`) {
+export async function checkRoles(address: `0x${string}`) {
 	try {
-		const [tokenOwner, govAuthority] = await Promise.all([
+		const [tokenOwner, govAuthority, balance] = await Promise.all([
 			readContract(config, { ...bvsTokenConfig, functionName: 'owner' }),
-			readContract(config, { ...bvsRegistryConfig, functionName: 'governanceAuthority' })
+			readContract(config, { ...bvsRegistryConfig, functionName: 'governanceAuthority' }),
+			readContract(config, { ...bvsTokenConfig, functionName: 'balanceOf', args: [address] })
 		]);
 		const admin =
 			address.toLowerCase() === (tokenOwner as string).toLowerCase() ||
 			address.toLowerCase() === (govAuthority as string).toLowerCase();
-		wallet.update((w) => ({ ...w, isAdmin: admin }));
+		const holder = (balance as bigint) > 0n;
+		wallet.update((w) => ({ ...w, isAdmin: admin, isTokenHolder: holder }));
 	} catch {
-		wallet.update((w) => ({ ...w, isAdmin: false }));
+		wallet.update((w) => ({ ...w, isAdmin: false, isTokenHolder: false }));
 	}
 }

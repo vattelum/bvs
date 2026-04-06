@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { readContract, writeContract, waitForTransactionReceipt } from '@wagmi/core';
-	import { config } from '$lib/services/ethereum';
+	import { config, checkRoles } from '$lib/services/ethereum';
+	import { wallet } from '$lib/stores/wallet';
 	import { bvsTokenConfig } from '$lib/contracts';
 	import { toHex } from 'viem';
+	import { get } from 'svelte/store';
 	import Tooltip from '$lib/components/Tooltip.svelte';
 
 	let { onminted }: { onminted?: () => void } = $props();
@@ -50,6 +52,8 @@
 			success = `Token minted to ${recipient.slice(0, 6)}...${recipient.slice(-4)}`;
 			recipient = '';
 			credential = '';
+			const w = get(wallet);
+			if (w.address) await checkRoles(w.address);
 			onminted?.();
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Mint failed';
