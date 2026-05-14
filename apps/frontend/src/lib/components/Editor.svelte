@@ -1,13 +1,11 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { marked } from 'marked';
-	import DOMPurify from 'dompurify';
 	import {
 		type Section,
 		createSection,
 		computeSectionNumber,
 		sectionsToMarkdown,
-		wrapSections,
+		renderSectionedMarkdown,
 		collectAllNumbers,
 		nextChildNumber,
 		nextSiblingNumber,
@@ -17,12 +15,33 @@
 	let {
 		sections = $bindable<Section[]>([]),
 		amendmentMode = false,
-		originalSectionNumbers = [] as string[]
+		originalSectionNumbers = [] as string[],
+		lockedSections = [] as number[]
 	}: {
 		sections: Section[];
 		amendmentMode?: boolean;
 		originalSectionNumbers?: string[];
+		/** Top-level section numbers locked on the target document. Cascade:
+		 *  locking §3 also locks §3.1, §3.2.A, etc. Editor renders matched
+		 *  sections as disabled with a Locked badge. Empty for non-amend modes
+		 *  or when the target has no on-chain restrictions. */
+		lockedSections?: number[];
 	} = $props();
+
+	function rootSectionNumber(fixedNumber: string | undefined): number | null {
+		if (!fixedNumber) return null;
+		const m = fixedNumber.match(/^(\d+)/);
+		return m ? Number(m[1]) : null;
+	}
+
+	function isSectionLocked(fixedNumber: string | undefined): boolean {
+		if (lockedSections.length === 0) return false;
+		// `0` is the entire-document sentinel — every section is locked.
+		if (lockedSections.includes(0)) return true;
+		const root = rootSectionNumber(fixedNumber);
+		if (root === null) return false;
+		return lockedSections.includes(root);
+	}
 
 	let preview = $state(false);
 	let previewHtml = $state('');
@@ -37,8 +56,10 @@
 
 	async function togglePreview() {
 		if (!preview) {
-			const md = sectionsToMarkdown(sections);
-			previewHtml = DOMPurify.sanitize(wrapSections(await marked.parse(md)));
+			// No cache key — the editor body changes on every keystroke, so caching
+			// the rendered HTML would be wrong. The shared helper handles the
+			// marked + DOMPurify + section-wrap pipeline; we just skip the cache.
+			previewHtml = await renderSectionedMarkdown(sectionsToMarkdown(sections));
 		}
 		preview = !preview;
 	}
@@ -232,8 +253,9 @@
 				{#each sections as section, i (section.id)}
 					{@const num = section.fixedNumber ? `§${section.fixedNumber}` : computeSectionNumber(sections, i)}
 					{@const canAddSibling = !amendmentMode || section.depth === minSelectedDepth()}
+					{@const locked = amendmentMode && isSectionLocked(section.fixedNumber)}
 					<div
-						class="border-l-2 border-primary rounded-r bg-bg-light"
+						class="border-l-2 rounded-r {locked ? 'border-error/50 bg-bg-light/40' : 'border-primary bg-bg-light'}"
 						style="margin-left: {depthIndent(section.depth)}"
 					>
 						<div class="px-4 py-3">
@@ -243,11 +265,15 @@
 								<input
 									type="text"
 									bind:value={section.title}
+									disabled={locked}
 									placeholder="Section title"
-									class="flex-1 bg-bg border border-border rounded px-2 py-1 focus:border-primary outline-none text-sm text-text placeholder:text-text-muted"
+									class="flex-1 bg-bg border border-border rounded px-2 py-1 focus:border-primary outline-none text-sm text-text placeholder:text-text-muted disabled:opacity-50 disabled:cursor-not-allowed"
 								/>
+								{#if locked}
+									<span class="text-[10px] uppercase tracking-wider text-error border border-error/40 rounded px-1.5 py-0.5 shrink-0" title="This section is locked on-chain — addDocument will revert SectionLocked.">Locked</span>
+								{/if}
 								<div class="flex items-center gap-1.5 shrink-0">
-									{#if canAddSibling}
+									{#if canAddSibling && !locked}
 										<button
 											onclick={() => addSibling(i)}
 											class="text-xs px-2.5 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
@@ -256,7 +282,7 @@
 											+ Section
 										</button>
 									{/if}
-									{#if section.depth < 3}
+									{#if section.depth < 3 && !locked}
 										<button
 											onclick={() => addChild(i)}
 											class="text-xs px-2.5 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
@@ -279,9 +305,10 @@
 							<textarea
 								bind:value={section.content}
 								onfocus={(e) => onTextareaFocus(e.currentTarget as HTMLTextAreaElement, i)}
-								placeholder="Section content..."
+								disabled={locked}
+								placeholder={locked ? 'Locked — cannot be amended on-chain.' : 'Section content...'}
 								rows="3"
-								class="w-full bg-bg border border-border rounded p-2 text-sm text-text placeholder:text-text-muted outline-none focus:border-primary resize-y font-mono"
+								class="w-full bg-bg border border-border rounded p-2 text-sm text-text placeholder:text-text-muted outline-none focus:border-primary resize-y font-mono disabled:opacity-50 disabled:cursor-not-allowed"
 							></textarea>
 						</div>
 					</div>

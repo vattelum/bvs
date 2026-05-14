@@ -2,15 +2,14 @@ import type { PublicClient, AbiEvent, GetLogsParameters } from 'viem';
 
 const BLOCK_RANGE = 50_000n;
 
+// BigInt-safe JSON helpers — viem logs contain BigInt values that JSON.stringify cannot handle.
 function jsonReplacer(_key: string, value: unknown): unknown {
-	if (typeof value === 'bigint') return { __bigint__: value.toString() };
+	if (typeof value === 'bigint') return `__bigint__${value.toString()}`;
 	return value;
 }
 
 function jsonReviver(_key: string, value: unknown): unknown {
-	if (value && typeof value === 'object' && '__bigint__' in value) {
-		return BigInt((value as { __bigint__: string }).__bigint__);
-	}
+	if (typeof value === 'string' && value.startsWith('__bigint__')) return BigInt(value.slice(10));
 	return value;
 }
 
@@ -66,6 +65,7 @@ export async function getPaginatedLogs<T extends AbiEvent>(
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			console.error(`[logs] ${cacheKey ?? 'scan'}: chunk ${chunk} failed at blocks ${from}–${to}: ${msg}`);
+			// Return what we have so far — progress is already saved
 			return { logs: allLogs, lastScannedBlock: from - 1n, complete: false };
 		}
 	}
@@ -97,29 +97,3 @@ function setScanProgress(key: string, data: ScanProgress) {
 	}
 }
 
-// ──────────────────────── Member cache ───────────────────────
-
-interface CachedMembers {
-	lastBlock: string;
-	minted: Array<{ address: string; tokenId: string }>;
-	burned: string[];
-}
-
-const CACHE_KEY = 'bvs:members';
-
-export function getCachedMembers(): CachedMembers | null {
-	try {
-		const raw = localStorage.getItem(CACHE_KEY);
-		return raw ? JSON.parse(raw) : null;
-	} catch {
-		return null;
-	}
-}
-
-export function setCachedMembers(data: CachedMembers) {
-	try {
-		localStorage.setItem(CACHE_KEY, JSON.stringify(data));
-	} catch {
-		// storage full or unavailable
-	}
-}

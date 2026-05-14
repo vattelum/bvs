@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity ^0.8.31;
 
 import {Test} from "forge-std/Test.sol";
 import {BVSToken} from "../src/BVSToken.sol";
 import {IVerifier} from "../src/interfaces/IVerifier.sol";
-import {IERC5192} from "../src/interfaces/IERC5192.sol";
 
 /// @dev Mock verifier that approves only whitelisted addresses.
 contract MockVerifier is IVerifier {
@@ -16,6 +15,24 @@ contract MockVerifier is IVerifier {
 
     function isVerified(address account) external view override returns (bool) {
         return approved[account];
+    }
+}
+
+/// @dev Malicious contract that attempts reentrancy on mint via onERC721Received.
+contract ReentrantRecipient {
+    BVSToken public token;
+    uint256 public attempts;
+
+    constructor(BVSToken _token) {
+        token = _token;
+    }
+
+    function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4) {
+        if (attempts < 1) {
+            attempts++;
+            token.mint(address(this), hex"");
+        }
+        return this.onERC721Received.selector;
     }
 }
 
@@ -41,7 +58,7 @@ contract BVSTokenTest is Test {
         verifier = new MockVerifier();
     }
 
-    // ──────────────────────── Scenario 1: Admin mints with credential ────
+    // ──────────────────────── Admin mint ─────────────────────────────────
 
     function test_mint_storesCredentialAndMintsToken() public {
         vm.prank(admin);
@@ -63,7 +80,21 @@ contract BVSTokenTest is Test {
         token.mint(alice, CREDENTIAL);
     }
 
-    // ──────────────────────── Scenario 2: Transfer reverts (soulbound) ───
+    function test_mint_byNonAdmin_reverts() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        token.mint(alice, CREDENTIAL);
+    }
+
+    function test_mint_emptyCredential() public {
+        vm.prank(admin);
+        token.mint(alice, EMPTY_CREDENTIAL);
+
+        assertEq(token.ownerOf(0), alice);
+        assertEq(token.getCredential(0), EMPTY_CREDENTIAL);
+    }
+
+    // ──────────────────────── Soulbound transfer reverts ─────────────────
 
     function test_transferFrom_reverts() public {
         vm.prank(admin);
@@ -83,7 +114,7 @@ contract BVSTokenTest is Test {
         token.safeTransferFrom(alice, bob, 0);
     }
 
-    // ──────────────────────── Scenario 3: locked() returns true ──────────
+    // ──────────────────────── locked() ───────────────────────────────────
 
     function test_locked_returnsTrue() public {
         vm.prank(admin);
@@ -97,7 +128,7 @@ contract BVSTokenTest is Test {
         token.locked(999);
     }
 
-    // ──────────────────────── Scenario 4: Holder burns own token ─────────
+    // ──────────────────────── Burn ───────────────────────────────────────
 
     function test_burn_byHolder() public {
         vm.prank(admin);
@@ -131,8 +162,6 @@ contract BVSTokenTest is Test {
         vm.expectRevert();
         token.getCredential(0);
     }
-
-    // ──────────────────────── Scenario 5: Burn authorization ─────────────
 
     function test_burn_byNonHolder_reverts() public {
         vm.prank(admin);
@@ -180,7 +209,7 @@ contract BVSTokenTest is Test {
         assertTrue(token.adminCanBurn());
     }
 
-    // ──────────────────────── Scenario 6: getCredential returns data ─────
+    // ──────────────────────── getCredential ──────────────────────────────
 
     function test_getCredential_returnsStoredData() public {
         bytes memory cred = abi.encodePacked("email:sha256:abcdef1234567890");
@@ -196,7 +225,7 @@ contract BVSTokenTest is Test {
         token.getCredential(999);
     }
 
-    // ──────────────────────── Scenario 7: No verifier — mint proceeds ───
+    // ──────────────────────── Verifier ───────────────────────────────────
 
     function test_mint_noVerifier_proceeds() public {
         assertEq(address(token.verifier()), address(0));
@@ -206,8 +235,6 @@ contract BVSTokenTest is Test {
 
         assertEq(token.ownerOf(0), alice);
     }
-
-    // ──────────────────────── Scenario 8: Verifier rejects unapproved ───
 
     function test_mint_verifierRejectsUnapproved() public {
         vm.prank(admin);
@@ -221,11 +248,10 @@ contract BVSTokenTest is Test {
     function test_mint_verifierApprovesWhitelisted() public {
         verifier.setApproved(alice, true);
 
-        vm.prank(admin);
+        vm.startPrank(admin);
         token.setVerifier(address(verifier));
-
-        vm.prank(admin);
         token.mint(alice, CREDENTIAL);
+        vm.stopPrank();
 
         assertEq(token.ownerOf(0), alice);
     }
@@ -241,21 +267,11 @@ contract BVSTokenTest is Test {
         vm.startPrank(admin);
         token.setVerifier(address(verifier));
         token.setVerifier(address(0));
+        token.mint(alice, CREDENTIAL);
         vm.stopPrank();
 
         assertEq(address(token.verifier()), address(0));
-
-        vm.prank(admin);
-        token.mint(alice, CREDENTIAL);
         assertEq(token.ownerOf(0), alice);
-    }
-
-    // ──────────────────────── Scenario 9: Non-admin mint reverts ────────
-
-    function test_mint_byNonAdmin_reverts() public {
-        vm.prank(alice);
-        vm.expectRevert();
-        token.mint(bob, CREDENTIAL);
     }
 
     function test_setVerifier_byNonAdmin_reverts() public {
@@ -264,17 +280,7 @@ contract BVSTokenTest is Test {
         token.setVerifier(address(verifier));
     }
 
-    // ──────────────────────── Scenario 10: Empty credential is valid ────
-
-    function test_mint_emptyCredential() public {
-        vm.prank(admin);
-        token.mint(alice, EMPTY_CREDENTIAL);
-
-        assertEq(token.ownerOf(0), alice);
-        assertEq(token.getCredential(0), EMPTY_CREDENTIAL);
-    }
-
-    // ──────────────────────── Single Token Per Address ─────────────────
+    // ──────────────────────── Single token per address ───────────────────
 
     function test_singleToken_revertOnDoubleMint() public {
         vm.startPrank(admin);
@@ -312,21 +318,39 @@ contract BVSTokenTest is Test {
         assertTrue(token.singleTokenPerAddress());
     }
 
-    // ──────────────────────── ERC-165 Interface Support ─────────────────
+    // ──────────────────────── totalSupply ────────────────────────────────
+
+    function test_totalSupply_tracksMintsAndBurns() public {
+        assertEq(token.totalSupply(), 0);
+
+        vm.prank(admin);
+        token.mint(alice, CREDENTIAL);
+        assertEq(token.totalSupply(), 1);
+
+        vm.prank(admin);
+        token.mint(bob, CREDENTIAL);
+        assertEq(token.totalSupply(), 2);
+
+        vm.prank(alice);
+        token.burn(0);
+        assertEq(token.totalSupply(), 1);
+    }
+
+    // ──────────────────────── ERC-165 ────────────────────────────────────
 
     function test_supportsInterface_ERC721() public view {
-        assertTrue(token.supportsInterface(0x80ac58cd)); // ERC-721
+        assertTrue(token.supportsInterface(0x80ac58cd));
     }
 
     function test_supportsInterface_ERC5192() public view {
-        assertTrue(token.supportsInterface(0xb45a3c0e)); // ERC-5192
+        assertTrue(token.supportsInterface(0xb45a3c0e));
     }
 
     function test_supportsInterface_ERC165() public view {
-        assertTrue(token.supportsInterface(0x01ffc9a7)); // ERC-165
+        assertTrue(token.supportsInterface(0x01ffc9a7));
     }
 
-    // ──────────────────────── Sequential Token IDs ──────────────────────
+    // ──────────────────────── Token IDs ──────────────────────────────────
 
     function test_tokenIds_autoIncrement() public {
         vm.startPrank(admin);
@@ -338,7 +362,18 @@ contract BVSTokenTest is Test {
         assertEq(token.ownerOf(1), bob);
     }
 
-    // ──────────────────────── Gas Estimation ────────────────────────────
+    // ──────────────────────── Reentrancy ─────────────────────────────────
+
+    function test_mint_reentrancy_reverts() public {
+        BVSToken reentrancyToken = new BVSToken(admin, false, true);
+        ReentrantRecipient recipient = new ReentrantRecipient(reentrancyToken);
+
+        vm.prank(admin);
+        vm.expectRevert();
+        reentrancyToken.mint(address(recipient), CREDENTIAL);
+    }
+
+    // ──────────────────────── Gas ────────────────────────────────────────
 
     function test_gas_mint() public {
         vm.prank(admin);
@@ -359,7 +394,7 @@ contract BVSTokenTest is Test {
         emit log_named_uint("Gas used for burn", gasUsed);
     }
 
-    // ──────────────────────── Fuzz Tests ────────────────────────────────
+    // ──────────────────────── Fuzz ───────────────────────────────────────
 
     function testFuzz_mint_arbitraryCredential(bytes calldata cred) public {
         vm.prank(admin);

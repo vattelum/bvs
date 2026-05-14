@@ -1,24 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { readContract } from '@wagmi/core';
-	import { marked } from 'marked';
-	import DOMPurify from 'dompurify';
-	import { config } from '$lib/services/ethereum';
+	import { config } from '$lib/services/wallet-config';
 	import { bvsRegistryConfig } from '$lib/contracts';
 	import { fetchFromArweave } from '$lib/services/arweave';
-	import { wrapSections } from '$lib/services/markdown';
-	import { loadCategories as fetchCategories } from '$lib/services/registry';
+	import ContentUriLink from '$lib/components/ContentUriLink.svelte';
+	import { renderSectionedMarkdown } from '$lib/services/markdown';
+	import { loadCategories as fetchCategories, loadDocuments } from '$lib/services/registry';
 	import Tooltip from '$lib/components/Tooltip.svelte';
-	import { docTypeLabel, relationLabel, RELATION_TYPES } from '$lib/constants/docTypes';
-
-	const snapshotUrl = import.meta.env.VITE_SNAPSHOT_SPACE
-		? `${import.meta.env.VITE_SNAPSHOT_HUB?.includes('testnet') ? 'https://testnet.snapshot.box' : 'https://snapshot.box'}/#/${import.meta.env.VITE_SNAPSHOT_SPACE}/proposal/`
-		: '';
+	import { docTypeLabel, relationLabel, RELATION_AMENDS, RELATION_REVISES, RELATION_REPEALS, RELATION_CODIFIES } from '$lib/constants/docTypes';
+	import { formatDate, formatCountdown, stripFrontmatter } from '$lib/services/format';
 
 	interface Reference {
 		registryAddress: string;
 		chainId: number;
 		categoryId: number;
+		documentId: number;
 		version: number;
 		relationType: number;
 		targetSection: string;
@@ -30,8 +27,8 @@
 		targetSection: string;
 	}
 
-	interface Document {
-		arweaveTxId: string;
+	interface Version {
+		contentUri: string;
 		contentHash: string;
 		title: string;
 		version: number;
@@ -41,18 +38,34 @@
 		references: Reference[];
 		refsLoaded: boolean;
 		incomingRefs: IncomingRef[];
-		// Per-document content slots
 		rawMarkdown: string;
 		htmlContent: string;
 		fetching: boolean;
 		fetched: boolean;
 	}
 
+	interface DocEntry {
+		documentId: number;
+		latestTitle: string;
+		versionCount: number;
+		versions: Version[];
+		expanded: boolean;
+		loading: boolean;
+		/** Per-document amendment restrictions, present only when set. Drives
+		 *  the on-row Locked / Restricted badge. Includes lastAmendmentTime so
+		 *  the badge can compute when the time window expires. */
+		restrictions?: {
+			minTimeBetweenAmendments: number;
+			lastAmendmentTime: number;
+			lockedSections: number[];
+		};
+	}
+
 	interface Category {
 		id: number;
 		name: string;
-		versionCount: number;
-		documents: Document[];
+		documentCount: number;
+		documents: DocEntry[];
 		expanded: boolean;
 		loading: boolean;
 	}
@@ -66,20 +79,31 @@
 	let categories = $state<Category[]>([]);
 	let loading = $state(true);
 	let error = $state('');
-	let selectedDoc = $state<{ categoryId: number; version: number } | null>(null);
+	let selectedVersion = $state<{ categoryId: number; documentId: number; version: number } | null>(null);
 	let copyLabel = $state('Copy');
 
-	function getSelectedDoc(): Document | null {
-		if (!selectedDoc) return null;
-		const cat = categories.find(c => c.id === selectedDoc!.categoryId);
-		return cat?.documents.find(d => d.version === selectedDoc!.version) ?? null;
+	// Reactive clock — drives lock-window countdown badges. One-minute
+	// resolution suffices for day/hour-scale countdowns; cheaper than 1s.
+	let nowSeconds = $state(Math.floor(Date.now() / 1000));
+	$effect(() => {
+		const id = setInterval(() => {
+			nowSeconds = Math.floor(Date.now() / 1000);
+		}, 60_000);
+		return () => clearInterval(id);
+	});
+
+	function getSelectedVersion(): Version | null {
+		if (!selectedVersion) return null;
+		const cat = categories.find(c => c.id === selectedVersion!.categoryId);
+		const doc = cat?.documents.find(d => d.documentId === selectedVersion!.documentId);
+		return doc?.versions.find(v => v.version === selectedVersion!.version) ?? null;
 	}
 
 	async function copyMarkdown() {
-		const doc = getSelectedDoc();
-		if (!doc) return;
+		const ver = getSelectedVersion();
+		if (!ver) return;
 		try {
-			await navigator.clipboard.writeText(doc.rawMarkdown);
+			await navigator.clipboard.writeText(ver.rawMarkdown);
 			copyLabel = 'Copied';
 			setTimeout(() => copyLabel = 'Copy', 2000);
 		} catch {
@@ -92,22 +116,8 @@
 		return categoryColors[index % categoryColors.length];
 	}
 
-	function formatDate(timestamp: number) {
-		const d = new Date(timestamp * 1000);
-		const months = [
-			'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-			'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-		];
-		const day = String(d.getDate()).padStart(2, '0');
-		return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
-	}
 
-	function stripFrontmatter(content: string): string {
-		const match = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
-		return match ? match[1].trim() : content;
-	}
-
-	async function loadCategories() {
+	async function loadCats() {
 		try {
 			const cats = await fetchCategories();
 			categories = cats.map(c => ({
@@ -128,20 +138,70 @@
 
 		if (cat.expanded) {
 			categories[index] = { ...cat, expanded: false };
-			selectedDoc = null;
+			selectedVersion = null;
 			return;
 		}
 
 		categories[index] = { ...cat, expanded: true, loading: true };
 
-		if (cat.versionCount > 0 && cat.documents.length === 0) {
+		if (cat.documentCount > 0 && cat.documents.length === 0) {
+			try {
+				const docs = await loadDocuments(cat.id);
+				categories[index] = {
+					...categories[index],
+					documents: docs.map((d) => {
+						const r = d.restrictions;
+						const hasLock = r.minTimeBetweenAmendments > 0 || r.lockedSections.length > 0;
+						return {
+							documentId: d.documentId,
+							latestTitle: d.latestTitle,
+							versionCount: d.versionCount,
+							versions: [],
+							expanded: false,
+							loading: false,
+							restrictions: hasLock
+								? {
+									minTimeBetweenAmendments: r.minTimeBetweenAmendments,
+									lastAmendmentTime: r.lastAmendmentTime,
+									lockedSections: r.lockedSections
+								}
+								: undefined
+						};
+					}),
+					loading: false
+				};
+			} catch {
+				categories[index] = { ...categories[index], loading: false };
+			}
+		} else {
+			categories[index] = { ...categories[index], loading: false };
+		}
+	}
+
+	async function toggleDocument(catIndex: number, docIndex: number) {
+		const cat = categories[catIndex];
+		const doc = cat.documents[docIndex];
+
+		if (doc.expanded) {
+			const updatedDocs = [...cat.documents];
+			updatedDocs[docIndex] = { ...doc, expanded: false };
+			categories[catIndex] = { ...cat, documents: updatedDocs };
+			selectedVersion = null;
+			return;
+		}
+
+		const updatedDocs = [...cat.documents];
+		updatedDocs[docIndex] = { ...doc, expanded: true, loading: true };
+		categories[catIndex] = { ...cat, documents: updatedDocs };
+
+		if (doc.versionCount > 0 && doc.versions.length === 0) {
 			try {
 				const history = (await readContract(config, {
 					...bvsRegistryConfig,
 					functionName: 'getHistory',
-					args: [BigInt(cat.id)]
+					args: [BigInt(cat.id), BigInt(doc.documentId)]
 				})) as Array<{
-					arweaveTxId: string;
+					contentUri: string;
 					contentHash: string;
 					title: string;
 					version: bigint;
@@ -150,8 +210,8 @@
 					docType: number;
 				}>;
 
-				const docs: Document[] = history.map((d) => ({
-					arweaveTxId: d.arweaveTxId,
+				const versions: Version[] = history.map((d) => ({
+					contentUri: d.contentUri,
 					contentHash: d.contentHash,
 					title: d.title,
 					version: Number(d.version),
@@ -167,51 +227,60 @@
 					fetched: false
 				}));
 
-				categories[index] = {
-					...categories[index],
-					documents: docs,
+				const updatedDocs2 = [...categories[catIndex].documents];
+				updatedDocs2[docIndex] = {
+					...updatedDocs2[docIndex],
+					versions,
 					loading: false
 				};
+				categories[catIndex] = { ...categories[catIndex], documents: updatedDocs2 };
 
-				loadAllReferences(index);
+				loadAllReferences(catIndex, docIndex);
 			} catch {
-				categories[index] = { ...categories[index], loading: false };
+				const updatedDocs2 = [...categories[catIndex].documents];
+				updatedDocs2[docIndex] = { ...updatedDocs2[docIndex], loading: false };
+				categories[catIndex] = { ...categories[catIndex], documents: updatedDocs2 };
 			}
 		} else {
-			categories[index] = { ...categories[index], loading: false };
+			const updatedDocs2 = [...categories[catIndex].documents];
+			updatedDocs2[docIndex] = { ...updatedDocs2[docIndex], loading: false };
+			categories[catIndex] = { ...categories[catIndex], documents: updatedDocs2 };
 		}
 	}
 
-	async function loadAllReferences(catIndex: number) {
+	async function loadAllReferences(catIndex: number, docIndex: number) {
 		const cat = categories[catIndex];
-		if (!cat || cat.documents.length === 0) return;
+		const doc = cat.documents[docIndex];
+		if (!doc || doc.versions.length === 0) return;
 
 		try {
 			const allRefs = await Promise.all(
-				cat.documents.map((doc) =>
+				doc.versions.map((ver) =>
 					readContract(config, {
 						...bvsRegistryConfig,
 						functionName: 'getReferences',
-						args: [BigInt(cat.id), BigInt(doc.version)]
+						args: [BigInt(cat.id), BigInt(doc.documentId), BigInt(ver.version)]
 					}).catch(() => [])
 				)
 			);
 
-			const updatedDocs = cat.documents.map((doc, i) => {
+			const updatedVersions = doc.versions.map((ver, i) => {
 				const refs = (allRefs[i] as Array<{
 					registryAddress: string;
 					chainId: bigint;
 					categoryId: bigint;
+					documentId: bigint;
 					version: bigint;
 					relationType: number;
 					targetSection: string;
 				}>);
 				return {
-					...doc,
+					...ver,
 					references: refs.map((r) => ({
 						registryAddress: r.registryAddress,
 						chainId: Number(r.chainId),
 						categoryId: Number(r.categoryId),
+						documentId: Number(r.documentId),
 						version: Number(r.version),
 						relationType: r.relationType,
 						targetSection: r.targetSection
@@ -220,15 +289,15 @@
 				};
 			});
 
-			for (const doc of updatedDocs) {
-				for (const ref of doc.references) {
-					if (ref.categoryId !== cat.id) continue;
-					const target = updatedDocs.find((d) => d.version === ref.version);
+			for (const ver of updatedVersions) {
+				for (const ref of ver.references) {
+					if (ref.categoryId !== cat.id || ref.documentId !== doc.documentId) continue;
+					const target = updatedVersions.find((v) => v.version === ref.version);
 					if (target) {
 						target.incomingRefs = [
 							...target.incomingRefs,
 							{
-								fromVersion: doc.version,
+								fromVersion: ver.version,
 								relationType: ref.relationType,
 								targetSection: ref.targetSection
 							}
@@ -237,106 +306,154 @@
 				}
 			}
 
+			const updatedDocs = [...categories[catIndex].documents];
+			updatedDocs[docIndex] = { ...updatedDocs[docIndex], versions: updatedVersions };
 			categories[catIndex] = { ...categories[catIndex], documents: updatedDocs };
 		} catch {
-			// References failed to load — documents still display without tags
+			// References failed to load — versions still display without tags
 		}
 	}
 
-	/** Whether a document is superseded (full repeal or revision) */
-	function isSuperseded(doc: Document): boolean {
-		return doc.incomingRefs.some(
-			(r) => (r.relationType === RELATION_TYPES.REPEALS && !r.targetSection) ||
-				r.relationType === RELATION_TYPES.REVISES
+	function isPartialRepeal(ver: Version): boolean {
+		if (ver.docType !== 3) return false;
+		return ver.references.some((r) => r.relationType === RELATION_REPEALS && r.targetSection.trim() !== '');
+	}
+
+	/** Compute display labels for versions: Originals/Revisions get version numbers, Amendments get amendment numbers */
+	function computeDisplayLabels(versions: Version[]): Map<number, string> {
+		const labels = new Map<number, string>();
+		let currentVersion = 0;
+		let amendmentCount = 0;
+
+		for (const ver of versions) {
+			if (ver.docType === 0 || ver.docType === 2) {
+				// Original or Revision — increment display version
+				currentVersion++;
+				amendmentCount = 0;
+				labels.set(ver.version, `v${currentVersion}`);
+			} else if (ver.docType === 1) {
+				// Amendment — sub-label under current version
+				amendmentCount++;
+				labels.set(ver.version, `Amendment ${amendmentCount}`);
+			} else if (ver.docType === 3) {
+				// Repeal — distinguish partial from full based on outgoing ref's targetSection
+				labels.set(ver.version, isPartialRepeal(ver) ? 'Partial Repeal' : 'Repeal');
+			} else if (ver.docType === 4) {
+				// Codification — shouldn't appear here (new doc), but handle gracefully
+				currentVersion++;
+				amendmentCount = 0;
+				labels.set(ver.version, `v${currentVersion} (Codified)`);
+			} else {
+				labels.set(ver.version, `v${ver.version}`);
+			}
+		}
+		return labels;
+	}
+
+	/** Get the document's canonical title (from the first Original entry) */
+	function getDocumentTitle(doc: DocEntry): string {
+		if (doc.versions.length > 0) {
+			const original = doc.versions.find(v => v.docType === 0);
+			if (original) return original.title;
+			return doc.versions[0].title;
+		}
+		return doc.latestTitle;
+	}
+
+	function getRefDocTitle(ref: Reference): string {
+		const cat = categories.find(c => c.id === ref.categoryId);
+		const doc = cat?.documents.find(d => d.documentId === ref.documentId);
+		return doc?.latestTitle ?? `doc ${ref.documentId}`;
+	}
+
+	function isSuperseded(ver: Version): boolean {
+		return ver.incomingRefs.some(
+			(r) => (r.relationType === RELATION_REPEALS && !r.targetSection) ||
+				r.relationType === RELATION_REVISES
 		);
 	}
 
-	/** Format an incoming reference as a display tag */
-	function incomingRefLabel(ref: IncomingRef): string {
-		if (ref.relationType === RELATION_TYPES.AMENDS) {
-			return ref.targetSection ? `\u00A7${ref.targetSection} amended by ${ref.fromVersion}` : `Amended by ${ref.fromVersion}`;
+	function incomingRefLabel(ref: IncomingRef, displayLabels: Map<number, string>): string {
+		const label = displayLabels.get(ref.fromVersion) ?? `v${ref.fromVersion}`;
+		if (ref.relationType === RELATION_AMENDS) {
+			return ref.targetSection ? `\u00A7${ref.targetSection} amended by ${label}` : `Amended by ${label}`;
 		}
-		if (ref.relationType === RELATION_TYPES.REPEALS) {
-			if (ref.targetSection) return `\u00A7${ref.targetSection} repealed by ${ref.fromVersion}`;
-			return `Repealed by ${ref.fromVersion}`;
+		if (ref.relationType === RELATION_REPEALS) {
+			if (ref.targetSection) return `\u00A7${ref.targetSection} repealed`;
+			return 'Repealed';
 		}
-		if (ref.relationType === RELATION_TYPES.REVISES) {
-			return `Replaced by ${ref.fromVersion}`;
+		if (ref.relationType === RELATION_REVISES) {
+			return `Replaced by ${label}`;
 		}
-		if (ref.relationType === RELATION_TYPES.CODIFIES) {
-			return `Codified in ${ref.fromVersion}`;
+		if (ref.relationType === RELATION_CODIFIES) {
+			return `Codified in ${label}`;
 		}
-		return `Referenced by ${ref.fromVersion}`;
+		return `Referenced by ${label}`;
 	}
 
-	/** Look up a document title within a category */
-	function docTitle(categoryId: number, version: number): string {
-		const cat = categories.find(c => c.id === categoryId);
-		const doc = cat?.documents.find(d => d.version === version);
-		return doc?.title ?? '';
-	}
-
-	function findDoc(categoryId: number, version: number): { catIdx: number; docIdx: number } | null {
+	function findVersion(categoryId: number, documentId: number, version: number): { catIdx: number; docIdx: number; verIdx: number } | null {
 		const catIdx = categories.findIndex(c => c.id === categoryId);
 		if (catIdx === -1) return null;
-		const docIdx = categories[catIdx].documents.findIndex(d => d.version === version);
+		const docIdx = categories[catIdx].documents.findIndex(d => d.documentId === documentId);
 		if (docIdx === -1) return null;
-		return { catIdx, docIdx };
+		const verIdx = categories[catIdx].documents[docIdx].versions.findIndex(v => v.version === version);
+		if (verIdx === -1) return null;
+		return { catIdx, docIdx, verIdx };
 	}
 
-	async function viewDocument(categoryId: number, version: number) {
-		// Toggle off
-		if (selectedDoc?.categoryId === categoryId && selectedDoc?.version === version) {
-			selectedDoc = null;
+	async function viewVersion(categoryId: number, documentId: number, version: number) {
+		if (selectedVersion?.categoryId === categoryId && selectedVersion?.documentId === documentId && selectedVersion?.version === version) {
+			selectedVersion = null;
 			copyLabel = 'Copy';
 			return;
 		}
 
-		selectedDoc = { categoryId, version };
+		selectedVersion = { categoryId, documentId, version };
 		copyLabel = 'Copy';
 
-		const loc = findDoc(categoryId, version);
+		const loc = findVersion(categoryId, documentId, version);
 		if (!loc) return;
-		const doc = categories[loc.catIdx].documents[loc.docIdx];
+		const ver = categories[loc.catIdx].documents[loc.docIdx].versions[loc.verIdx];
 
-		// Already fetched — nothing to do
-		if (doc.fetched) return;
-		// Already fetching — just select it, result will appear when ready
-		if (doc.fetching) return;
+		if (ver.fetched || ver.fetching) return;
 
-		// Start fetch
-		categories[loc.catIdx].documents[loc.docIdx] = { ...doc, fetching: true };
+		const updatedVersions = [...categories[loc.catIdx].documents[loc.docIdx].versions];
+		updatedVersions[loc.verIdx] = { ...ver, fetching: true };
+		const updatedDocs = [...categories[loc.catIdx].documents];
+		updatedDocs[loc.docIdx] = { ...updatedDocs[loc.docIdx], versions: updatedVersions };
+		categories[loc.catIdx] = { ...categories[loc.catIdx], documents: updatedDocs };
 
 		try {
-			const text = await fetchFromArweave(doc.arweaveTxId, doc.contentHash);
+			const text = await fetchFromArweave(ver.contentUri, ver.contentHash);
 			const body = stripFrontmatter(text);
-			const html = DOMPurify.sanitize(wrapSections(await marked.parse(body)));
+			const html = await renderSectionedMarkdown(body, ver.contentHash);
 
-			// Write result to the document's own slot
-			const current = findDoc(categoryId, version);
+			const current = findVersion(categoryId, documentId, version);
 			if (current) {
-				categories[current.catIdx].documents[current.docIdx] = {
-					...categories[current.catIdx].documents[current.docIdx],
-					rawMarkdown: body,
-					htmlContent: html,
-					fetching: false,
-					fetched: true
-				};
+				const uv = [...categories[current.catIdx].documents[current.docIdx].versions];
+				uv[current.verIdx] = { ...uv[current.verIdx], rawMarkdown: body, htmlContent: html, fetching: false, fetched: true };
+				const ud = [...categories[current.catIdx].documents];
+				ud[current.docIdx] = { ...ud[current.docIdx], versions: uv };
+				categories[current.catIdx] = { ...categories[current.catIdx], documents: ud };
 			}
 		} catch {
-			const current = findDoc(categoryId, version);
+			const current = findVersion(categoryId, documentId, version);
 			if (current) {
-				categories[current.catIdx].documents[current.docIdx] = {
-					...categories[current.catIdx].documents[current.docIdx],
+				const uv = [...categories[current.catIdx].documents[current.docIdx].versions];
+				uv[current.verIdx] = {
+					...uv[current.verIdx],
 					htmlContent: '<p class="text-text-muted">Content unavailable. The document may still be confirming on the Arweave network \u2014 this can take up to 30 minutes after upload. Try again shortly.</p>',
 					fetching: false,
 					fetched: true
 				};
+				const ud = [...categories[current.catIdx].documents];
+				ud[current.docIdx] = { ...ud[current.docIdx], versions: uv };
+				categories[current.catIdx] = { ...categories[current.catIdx], documents: ud };
 			}
 		}
 	}
 
-	onMount(loadCategories);
+	onMount(loadCats);
 </script>
 
 <div>
@@ -363,8 +480,8 @@
 						</div>
 						<div class="flex items-center gap-3">
 							<span class="text-sm text-text-muted">
-								{cat.versionCount}
-								{cat.versionCount === 1 ? 'document' : 'documents'}
+								{cat.documentCount}
+								{cat.documentCount === 1 ? 'document' : 'documents'}
 							</span>
 							<span
 								class="text-text-muted text-xs transition-transform {cat.expanded
@@ -380,85 +497,136 @@
 						<div class="border-t border-border px-5 py-4">
 							{#if cat.loading}
 								<p class="text-text-secondary text-sm">Loading documents...</p>
-							{:else if cat.versionCount === 0}
+							{:else if cat.documentCount === 0}
 								<p class="text-text-muted text-sm">No documents recorded yet.</p>
 							{:else}
 								<div class="flex flex-col gap-2">
-									{#each cat.documents as doc}
-										{@const isSelected =
-											selectedDoc?.categoryId === cat.id &&
-											selectedDoc?.version === doc.version}
+									{#each cat.documents as doc, di}
 										<div>
 											<button
-												onclick={() =>
-													viewDocument(cat.id, doc.version)}
-												class="w-full text-left px-3 py-2 rounded transition-colors cursor-pointer
-												{isSelected ? 'bg-bg-lighter' : 'hover:bg-bg-lighter'}"
+												onclick={() => toggleDocument(i, di)}
+												class="w-full text-left px-3 py-2 rounded transition-colors cursor-pointer hover:bg-bg-lighter flex items-center justify-between"
 											>
-												<div class="flex items-center justify-between">
-													<div class="flex items-center gap-3 flex-wrap">
-														<span class="text-xs text-text-muted font-mono w-5 text-right shrink-0"
-															>{doc.version}.</span
+												<div class="flex items-center gap-3">
+													<span class="text-xs text-text-muted font-mono w-5 text-right shrink-0">{doc.documentId}.</span>
+													<span class="text-sm font-medium">{doc.versions.length > 0 ? getDocumentTitle(doc) : doc.latestTitle}</span>
+													{#if doc.restrictions}
+														{@const r = doc.restrictions}
+														{@const isEntire = r.lockedSections.includes(0)}
+														{@const expiresAt = r.minTimeBetweenAmendments > 0 && r.lastAmendmentTime > 0
+															? r.lastAmendmentTime + r.minTimeBetweenAmendments
+															: 0}
+														{@const active = expiresAt > 0 && expiresAt > nowSeconds}
+														{@const sectionsLabel = isEntire
+															? 'entire document'
+															: r.lockedSections.length > 0
+																? '§' + r.lockedSections.join(', §')
+																: ''}
+														<span
+															class="text-[10px] uppercase tracking-wider rounded border px-1.5 py-0.5 {active ? 'text-error border-error/40' : 'text-cat-gold border-cat-gold/40'}"
+															title={(sectionsLabel ? sectionsLabel + ' locked' : '') + (r.minTimeBetweenAmendments > 0 ? (sectionsLabel ? ' — ' : '') + (active ? formatCountdown(expiresAt) + ' remaining' : Math.round(r.minTimeBetweenAmendments / 86400) + '-day window (elapsed)') : sectionsLabel ? ', permanent' : '')}
 														>
-														<span class="text-sm {isSuperseded(doc) ? 'line-through text-text-muted' : ''}">{doc.title}</span>
-														<span class="text-xs px-1.5 py-0.5 rounded bg-bg-lighter text-text-muted">{docTypeLabel(doc.docType)}</span>
-														{#each doc.incomingRefs as iref}
-															<span class="text-xs px-1.5 py-0.5 rounded bg-bg-lighter text-text-secondary">{incomingRefLabel(iref)}</span>
-														{/each}
-													</div>
-													<div class="flex items-center gap-3">
-													{#if doc.voteId && snapshotUrl}
-														<a
-															href="{snapshotUrl}{doc.voteId}"
-															target="_blank"
-															rel="noopener noreferrer"
-															class="text-xs text-primary hover:underline"
-															onclick={(e) => e.stopPropagation()}
-														>
-															See vote
-														</a>
+															{#if active}
+																Locked — {formatCountdown(expiresAt)} left{#if !isEntire && r.lockedSections.length > 0}, {sectionsLabel}{/if}
+															{:else if isEntire}
+																Restricted (permanent)
+															{:else if r.lockedSections.length > 0}
+																Restricted ({sectionsLabel})
+															{:else}
+																Restricted
+															{/if}
+														</span>
 													{/if}
-													<span class="text-xs text-text-muted">
-														Ratified {formatDate(doc.timestamp)}
-													</span>
 												</div>
+												<div class="flex items-center gap-3">
+													<span class="text-xs text-text-muted">
+														{#if doc.versions.length > 0}
+															{@const vCount = doc.versions.filter(v => v.docType === 0 || v.docType === 2).length}
+															{@const aCount = doc.versions.filter(v => v.docType === 1).length}
+															v{vCount}{#if aCount > 0}, {aCount} {aCount === 1 ? 'amendment' : 'amendments'}{/if}
+														{:else}
+															{doc.versionCount} {doc.versionCount === 1 ? 'entry' : 'entries'}
+														{/if}
+													</span>
+													<span class="text-text-muted text-xs transition-transform {doc.expanded ? 'rotate-180' : ''}">&#9660;</span>
 												</div>
 											</button>
 
-											{#if isSelected}
-												<div
-													class="mt-2 mb-2 mx-3 p-4 rounded bg-bg border border-border"
-												>
-													{#if doc.fetching}
-														<p class="text-text-secondary text-sm">
-															Loading document from permanent storage... This may take a moment (sometimes several minutes).
-														</p>
-													{:else if doc.fetched}
-														{#if doc.references.length > 0}
-															<div class="mb-3 pb-3 border-b border-border">
-																<span class="text-xs text-text-muted">References:</span>
-																{#each doc.references as ref}
-																	<span class="text-xs ml-2">
-																		{relationLabel(ref.relationType)} {ref.version}{#if docTitle(ref.categoryId, ref.version)}, {docTitle(ref.categoryId, ref.version)}{/if}{#if ref.targetSection}, {'\u00A7'}{ref.targetSection}{/if}
-																	</span>
-																{/each}
-															</div>
-														{/if}
-														<div class="doc-viewer prose prose-invert max-w-none text-sm">
-															{@html doc.htmlContent}
-														</div>
-														<div class="flex justify-end mt-3">
-															<button
-																onclick={copyMarkdown}
-																class="text-xs px-3 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
-															>
-																{copyLabel}
-															</button>
-														</div>
+											{#if doc.expanded}
+												<div class="ml-8 mt-1 mb-2 border-l border-border pl-4">
+													{#if doc.loading}
+														<p class="text-text-secondary text-sm py-1">Loading versions...</p>
 													{:else}
-														<p class="text-text-secondary text-sm">
-															Loading document from permanent storage... This may take a moment (sometimes several minutes).
-														</p>
+														{@const displayLabels = computeDisplayLabels(doc.versions)}
+													{#each doc.versions as ver}
+															{@const isSelected =
+																selectedVersion?.categoryId === cat.id &&
+																selectedVersion?.documentId === doc.documentId &&
+																selectedVersion?.version === ver.version}
+														{@const displayLabel = displayLabels.get(ver.version) ?? `v${ver.version}`}
+															<div>
+																<button
+																	onclick={() => viewVersion(cat.id, doc.documentId, ver.version)}
+																	class="w-full text-left px-3 py-2 rounded transition-colors cursor-pointer
+																	{isSelected ? 'bg-bg-lighter' : 'hover:bg-bg-lighter'}"
+																>
+																	<div class="flex items-center justify-between">
+																		<div class="flex items-center gap-3 flex-wrap">
+																			<span class="text-xs text-text-muted font-mono shrink-0">{displayLabel}</span>
+																			{#if ver.docType === 0 || ver.docType === 2}
+																				<span class="text-sm {isSuperseded(ver) ? 'line-through text-text-muted' : ''}">{ver.title}</span>
+																			{/if}
+																			{#if ver.docType !== 0}
+																				<span class="text-xs px-1.5 py-0.5 rounded bg-bg-lighter text-text-muted">{isPartialRepeal(ver) ? 'Partial Repeal' : docTypeLabel(ver.docType)}</span>
+																			{/if}
+																			{#each ver.incomingRefs as iref}
+																				<span class="text-xs px-1.5 py-0.5 rounded bg-bg-lighter text-text-secondary">{incomingRefLabel(iref, displayLabels)}</span>
+																			{/each}
+																		</div>
+																		<span class="text-xs text-text-muted">
+																			Ratified {formatDate(ver.timestamp)}
+																		</span>
+																	</div>
+																</button>
+
+																{#if isSelected}
+																	<div class="mt-2 mb-2 mx-3 p-4 rounded bg-bg border border-border">
+																		{#if ver.fetching}
+																			<p class="text-text-secondary text-sm">
+																				Loading document from permanent storage... This may take a moment (sometimes several minutes).
+																			</p>
+																		{:else if ver.fetched}
+																			{#if ver.references.length > 0}
+																				<div class="mb-3 pb-3 border-b border-border">
+																					<span class="text-xs text-text-muted">References:</span>
+																					{#each ver.references as ref}
+																						<span class="text-xs ml-2">
+																							{relationLabel(ref.relationType)} {getRefDocTitle(ref)}, v{ref.version}{#if ref.targetSection}, {'\u00A7'}{ref.targetSection}{/if}
+																						</span>
+																					{/each}
+																				</div>
+																			{/if}
+																			<div class="doc-viewer prose prose-invert max-w-none text-sm">
+																				{@html ver.htmlContent}
+																			</div>
+																			<div class="mt-3 pt-3 border-t border-border flex items-center justify-between">
+																				<span class="text-xs text-text-muted">Content URI: <ContentUriLink uri={ver.contentUri} /></span>
+																				<button
+																					onclick={copyMarkdown}
+																					class="text-xs px-3 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
+																				>
+																					{copyLabel}
+																				</button>
+																			</div>
+																		{:else}
+																			<p class="text-text-secondary text-sm">
+																				Loading document from permanent storage... This may take a moment (sometimes several minutes).
+																			</p>
+																		{/if}
+																	</div>
+																{/if}
+															</div>
+														{/each}
 													{/if}
 												</div>
 											{/if}

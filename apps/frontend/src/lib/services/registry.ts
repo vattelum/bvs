@@ -1,11 +1,35 @@
 import { readContract } from '@wagmi/core';
-import { config } from '$lib/services/ethereum';
-import { bvsRegistryConfig } from '$lib/contracts';
+import { config } from '$lib/services/wallet-config';
+import { bvsRegistryConfig, BVSRegistryABI } from '$lib/contracts';
+import { fetchFromArweave } from '$lib/services/arweave';
+import { stripFrontmatter } from '$lib/services/format';
+import { markdownToSections, type Section } from '$lib/services/markdown';
+import {
+	parseVariableSchema,
+	type TemplateVariable
+} from '$lib/services/template-variables';
 
 export interface CategoryInfo {
 	id: number;
 	name: string;
+	documentCount: number;
+}
+
+export interface AmendmentRestrictionsInfo {
+	minTimeBetweenAmendments: number;
+	lastAmendmentTime: number;
+	lockedSections: number[];
+}
+
+export interface DocumentInfo {
+	categoryId: number;
+	documentId: number;
 	versionCount: number;
+	latestTitle: string;
+	/** On-chain amendment restrictions for this document. Fetched in the same
+	 *  parallel batch as title/versionCount so no extra round-trip is needed
+	 *  when the category expands. */
+	restrictions: AmendmentRestrictionsInfo;
 }
 
 export async function loadCategories(): Promise<CategoryInfo[]> {
@@ -16,7 +40,7 @@ export async function loadCategories(): Promise<CategoryInfo[]> {
 
 	const cats: CategoryInfo[] = [];
 	for (let i = 0n; i < count; i++) {
-		const [name, versionCount] = await Promise.all([
+		const [name, docCount] = await Promise.all([
 			readContract(config, {
 				...bvsRegistryConfig,
 				functionName: 'categoryNames',
@@ -24,15 +48,146 @@ export async function loadCategories(): Promise<CategoryInfo[]> {
 			}),
 			readContract(config, {
 				...bvsRegistryConfig,
-				functionName: 'getVersionCount',
+				functionName: 'getDocumentCount',
 				args: [i]
 			})
 		]);
 		cats.push({
 			id: Number(i),
 			name: name as string,
-			versionCount: Number(versionCount as bigint)
+			documentCount: Number(docCount as bigint)
 		});
 	}
 	return cats;
+}
+
+export async function loadDocuments(categoryId: number): Promise<DocumentInfo[]> {
+	const docCount = (await readContract(config, {
+		...bvsRegistryConfig,
+		functionName: 'getDocumentCount',
+		args: [BigInt(categoryId)]
+	})) as bigint;
+
+	const docs: DocumentInfo[] = [];
+	for (let i = 1n; i <= docCount; i++) {
+		const [versionCount, original, restrictionsRaw] = await Promise.all([
+			readContract(config, {
+				...bvsRegistryConfig,
+				functionName: 'getVersionCount',
+				args: [BigInt(categoryId), i]
+			}) as Promise<bigint>,
+			readContract(config, {
+				...bvsRegistryConfig,
+				functionName: 'getDocument',
+				args: [BigInt(categoryId), i, 1n]
+			}) as Promise<{ title: string }>,
+			readContract(config, {
+				...bvsRegistryConfig,
+				functionName: 'getAmendmentRestrictions',
+				args: [BigInt(categoryId), i]
+			}) as Promise<readonly [bigint, bigint, readonly bigint[]]>
+		]);
+		docs.push({
+			categoryId,
+			documentId: Number(i),
+			versionCount: Number(versionCount),
+			latestTitle: original.title,
+			restrictions: {
+				minTimeBetweenAmendments: Number(restrictionsRaw[0]),
+				lastAmendmentTime: Number(restrictionsRaw[1]),
+				lockedSections: restrictionsRaw[2].map(Number)
+			}
+		});
+	}
+	return docs;
+}
+
+export async function getDocumentCount(categoryId: number): Promise<number> {
+	const count = (await readContract(config, {
+		...bvsRegistryConfig,
+		functionName: 'getDocumentCount',
+		args: [BigInt(categoryId)]
+	})) as bigint;
+	return Number(count);
+}
+
+/**
+ * Read amendment restrictions for a single document. Use this when the caller
+ * already has a docId in hand and needs only the restrictions shape — for
+ * batched homepage loads, prefer the restrictions baked into `loadDocuments`.
+ */
+export async function loadAmendmentRestrictions(
+	categoryId: number,
+	documentId: number,
+	registryAddress?: `0x${string}`
+): Promise<AmendmentRestrictionsInfo> {
+	const cfg = registryAddress
+		? ({ address: registryAddress, abi: BVSRegistryABI } as const)
+		: bvsRegistryConfig;
+	const raw = (await readContract(config, {
+		...cfg,
+		functionName: 'getAmendmentRestrictions',
+		args: [BigInt(categoryId), BigInt(documentId)]
+	})) as readonly [bigint, bigint, readonly bigint[]];
+	return {
+		minTimeBetweenAmendments: Number(raw[0]),
+		lastAmendmentTime: Number(raw[1]),
+		lockedSections: raw[2].map(Number)
+	};
+}
+
+export interface DocumentBody {
+	title: string;
+	/** Raw markdown with YAML frontmatter stripped, leading whitespace trimmed. */
+	body: string;
+	/** Parsed sections from `body` (via markdownToSections). */
+	sections: Section[];
+	/** Template variables declared in the frontmatter (empty when absent). */
+	variables: TemplateVariable[];
+	contentUri: string;
+	contentHash: `0x${string}`;
+	docType: number;
+}
+
+/**
+ * Fetch one document version by (catId, docId, ver) from the given registry
+ * (defaults to the local BVSRegistry), pull its body from Arweave, strip
+ * frontmatter, parse sections, and parse any `variables:` block.
+ *
+ * Pass `version` to fetch a specific version via `getDocument`; omit it to
+ * fetch the latest via `getLatest`.
+ */
+export async function loadDocumentBody(
+	categoryId: number,
+	documentId: number,
+	version?: number,
+	registryAddress?: `0x${string}`
+): Promise<DocumentBody> {
+	const cfg = registryAddress
+		? ({ address: registryAddress, abi: BVSRegistryABI } as const)
+		: bvsRegistryConfig;
+
+	const raw = version !== undefined
+		? (await readContract(config, {
+			...cfg,
+			functionName: 'getDocument',
+			args: [BigInt(categoryId), BigInt(documentId), BigInt(version)]
+		})) as { contentUri: string; contentHash: `0x${string}`; title: string; docType: number; version: bigint }
+		: (await readContract(config, {
+			...cfg,
+			functionName: 'getLatest',
+			args: [BigInt(categoryId), BigInt(documentId)]
+		})) as { contentUri: string; contentHash: `0x${string}`; title: string; docType: number; version: bigint };
+
+	const text = await fetchFromArweave(raw.contentUri, raw.contentHash);
+	const body = stripFrontmatter(text);
+	return {
+		title: raw.title,
+		body,
+		sections: markdownToSections(body),
+		variables: parseVariableSchema(text),
+		contentUri: raw.contentUri,
+		contentHash: raw.contentHash,
+		docType: raw.docType
+	};
 }

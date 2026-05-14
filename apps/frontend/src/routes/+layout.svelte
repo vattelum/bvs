@@ -1,26 +1,29 @@
 <script lang="ts">
 	import '../app.css';
-	import '$lib/services/ethereum';
+	import '$lib/services/wallet-config';
+	import '$lib/services/markdown';
 	import { wallet } from '$lib/stores/wallet';
-	import { connectWallet, disconnectWallet } from '$lib/services/ethereum';
+	import { connectWallet, disconnectWallet } from '$lib/services/wallet-config';
 	import { page } from '$app/stores';
-	import Tooltip from '$lib/components/Tooltip.svelte';
+	import { afterNavigate } from '$app/navigation';
+	import { truncAddr } from '$lib/services/format';
+	import Toaster from '$lib/components/Toaster.svelte';
+	import Footer from '$lib/components/Footer.svelte';
 
 	let { children } = $props();
 
-	function truncateAddress(addr: string) {
-		return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-	}
-
-	const snapshotUrl = import.meta.env.VITE_SNAPSHOT_SPACE
-		? `${import.meta.env.VITE_SNAPSHOT_HUB?.includes('testnet') ? 'https://testnet.snapshot.box' : 'https://snapshot.box'}/#/${import.meta.env.VITE_SNAPSHOT_SPACE}`
-		: '';
-
 	const navItems = [
 		{ href: '/', label: 'Home' },
+		{ href: '/admin', label: 'Members' },
 		{ href: '/propose', label: 'Propose' },
-		{ href: '/admin', label: 'Members' }
+		{ href: '/vote', label: 'Vote' }
 	];
+
+	afterNavigate(() => {
+		if (typeof window !== 'undefined') {
+			window.scrollTo({ top: 0, left: 0 });
+		}
+	});
 </script>
 
 <svelte:head>
@@ -40,28 +43,19 @@
 					{item.label}
 				</a>
 			{/each}
-			{#if snapshotUrl}
-				<Tooltip text={"Snapshot is an off-chain governance platform where tokenholders vote on proposals without paying gas fees. Votes are signed messages verified against on-chain token ownership.\n\nThis link opens the BVS governance space, where proposals are created, debated, and voted on. Once a proposal passes, the admin uses this frontend to record the ratified document after which it will show up in the registry."}>
-					<a
-						href={snapshotUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="text-xs font-medium text-text-muted hover:text-text transition-colors border border-border rounded px-2 py-0.5"
-					>
-						Snapshot &#8599;
-					</a>
-				</Tooltip>
-			{/if}
 		</div>
 
 		<div>
 			{#if $wallet.connected && $wallet.address}
 				<div class="flex items-center gap-3">
+					{#if $wallet.isTokenHolder}
+						<span class="text-xs text-success">member</span>
+					{/if}
 					{#if $wallet.isAdmin}
 						<span class="text-xs text-primary">admin</span>
 					{/if}
 					<span class="text-sm text-text-secondary">
-						{truncateAddress($wallet.address)}
+						{truncAddr($wallet.address)}
 					</span>
 					<button
 						onclick={() => disconnectWallet()}
@@ -84,4 +78,7 @@
 	<main class="max-w-4xl mx-auto px-6 py-8">
 		{@render children()}
 	</main>
+
+	<Footer />
+	<Toaster />
 </div>

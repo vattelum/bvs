@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity ^0.8.31;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -9,7 +9,7 @@ import {IVerifier} from "./interfaces/IVerifier.sol";
 
 /// @title BVSToken — Soulbound Membership Token
 /// @notice ERC-721 + ERC-5192 non-transferable membership token with identity credentials
-///         and an optional pluggable verifier gate. Admin-only minting in BVS mode.
+///         and an optional pluggable verifier gate.
 contract BVSToken is ERC721, Ownable, ReentrancyGuard, IERC5192 {
     // ──────────────────────── Constants ────────────────────────
 
@@ -23,6 +23,7 @@ contract BVSToken is ERC721, Ownable, ReentrancyGuard, IERC5192 {
     // ──────────────────────── State ───────────────────────────
 
     uint256 private _nextTokenId;
+    uint256 private _totalBurned;
     IVerifier public verifier;
     mapping(uint256 => bytes) private _credentials;
 
@@ -52,10 +53,10 @@ contract BVSToken is ERC721, Ownable, ReentrancyGuard, IERC5192 {
 
     // ──────────────────────── Public / External ──────────────
 
-    /// @notice Mint a soulbound membership token to the given address.
-    /// @param to Recipient wallet address.
+    /// @notice Admin-mint a soulbound membership token to a recipient.
+    /// @param to The recipient of the token.
     /// @param credential Arbitrary identity credential bytes (can be empty).
-    function mint(address to, bytes calldata credential) external onlyOwner {
+    function mint(address to, bytes calldata credential) external onlyOwner nonReentrant {
         if (singleTokenPerAddress && balanceOf(to) > 0) {
             revert AlreadyMember(to);
         }
@@ -83,8 +84,14 @@ contract BVSToken is ERC721, Ownable, ReentrancyGuard, IERC5192 {
         }
         _burn(tokenId);
         delete _credentials[tokenId];
+        _totalBurned++;
 
         emit Burned(holder, tokenId);
+    }
+
+    /// @notice Returns the total number of active (non-burned) membership tokens.
+    function totalSupply() external view returns (uint256) {
+        return _nextTokenId - _totalBurned;
     }
 
     /// @notice Returns the identity credential stored with a token.

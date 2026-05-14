@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity ^0.8.31;
 
 /// @title ERC-5192: Minimal Soulbound NFTs
 /// @dev See https://eips.ethereum.org/EIPS/eip-5192

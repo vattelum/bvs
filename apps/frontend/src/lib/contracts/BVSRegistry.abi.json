@@ -6,6 +6,11 @@
         "name": "_governanceAuthority",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "_hardLock",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "nonpayable"
@@ -44,7 +49,12 @@
             "internalType": "uint256"
           },
           {
-            "name": "arweaveTxId",
+            "name": "documentId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "contentUri",
             "type": "string",
             "internalType": "string"
           },
@@ -73,7 +83,7 @@
       {
         "name": "refs",
         "type": "tuple[]",
-        "internalType": "struct BVSRegistry.ExternalReference[]",
+        "internalType": "struct DocumentReference[]",
         "components": [
           {
             "name": "registryAddress",
@@ -87,6 +97,11 @@
           },
           {
             "name": "categoryId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "documentId",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -110,7 +125,12 @@
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "version",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -157,6 +177,11 @@
         "name": "categoryId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [
@@ -174,11 +199,6 @@
         "name": "lockedSections",
         "type": "uint256[]",
         "internalType": "uint256[]"
-      },
-      {
-        "name": "coreThreshold",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -193,6 +213,11 @@
         "internalType": "uint256"
       },
       {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "version",
         "type": "uint256",
         "internalType": "uint256"
@@ -202,10 +227,10 @@
       {
         "name": "",
         "type": "tuple",
-        "internalType": "struct BVSRegistry.Document",
+        "internalType": "struct Document",
         "components": [
           {
-            "name": "arweaveTxId",
+            "name": "contentUri",
             "type": "string",
             "internalType": "string"
           },
@@ -246,7 +271,7 @@
   },
   {
     "type": "function",
-    "name": "getHistory",
+    "name": "getDocumentCount",
     "inputs": [
       {
         "name": "categoryId",
@@ -257,11 +282,35 @@
     "outputs": [
       {
         "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getHistory",
+    "inputs": [
+      {
+        "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
         "type": "tuple[]",
-        "internalType": "struct BVSRegistry.Document[]",
+        "internalType": "struct Document[]",
         "components": [
           {
-            "name": "arweaveTxId",
+            "name": "contentUri",
             "type": "string",
             "internalType": "string"
           },
@@ -308,16 +357,21 @@
         "name": "categoryId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [
       {
         "name": "",
         "type": "tuple",
-        "internalType": "struct BVSRegistry.Document",
+        "internalType": "struct Document",
         "components": [
           {
-            "name": "arweaveTxId",
+            "name": "contentUri",
             "type": "string",
             "internalType": "string"
           },
@@ -366,6 +420,11 @@
         "internalType": "uint256"
       },
       {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "version",
         "type": "uint256",
         "internalType": "uint256"
@@ -375,7 +434,7 @@
       {
         "name": "",
         "type": "tuple[]",
-        "internalType": "struct BVSRegistry.ExternalReference[]",
+        "internalType": "struct DocumentReference[]",
         "components": [
           {
             "name": "registryAddress",
@@ -389,6 +448,11 @@
           },
           {
             "name": "categoryId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "documentId",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -420,6 +484,11 @@
         "name": "categoryId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [
@@ -446,10 +515,61 @@
   },
   {
     "type": "function",
+    "name": "hardLock",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "rejectProposal",
+    "inputs": [
+      {
+        "name": "snapshotProposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesFor",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesAgainst",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesAbstain",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setAmendmentRestrictions",
     "inputs": [
       {
         "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -462,11 +582,6 @@
         "name": "lockedSections",
         "type": "uint256[]",
         "internalType": "uint256[]"
-      },
-      {
-        "name": "coreThreshold",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -491,6 +606,12 @@
     "inputs": [
       {
         "name": "categoryId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
         "type": "uint256",
         "indexed": true,
         "internalType": "uint256"
@@ -528,13 +649,19 @@
         "internalType": "uint256"
       },
       {
+        "name": "documentId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
         "name": "version",
         "type": "uint256",
         "indexed": true,
         "internalType": "uint256"
       },
       {
-        "name": "arweaveTxId",
+        "name": "contentUri",
         "type": "string",
         "indexed": false,
         "internalType": "string"
@@ -574,11 +701,53 @@
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "ProposalRejected",
+    "inputs": [
+      {
+        "name": "snapshotProposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesFor",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesAgainst",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "votesAbstain",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "AmendmentTooSoon",
     "inputs": [
       {
         "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -602,13 +771,71 @@
   },
   {
     "type": "error",
-    "name": "InvalidGovernanceAuthority",
+    "name": "DocumentDoesNotExist",
+    "inputs": [
+      {
+        "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidAuthority",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "NotGovernanceAuthority",
+    "name": "NotGovernance",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RestrictionsLocked",
+    "inputs": [
+      {
+        "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "earliestAllowed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SectionLocked",
+    "inputs": [
+      {
+        "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "lockedSection",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
@@ -616,6 +843,11 @@
     "inputs": [
       {
         "name": "categoryId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "documentId",
         "type": "uint256",
         "internalType": "uint256"
       },
