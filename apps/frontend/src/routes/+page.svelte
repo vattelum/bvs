@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { readContract } from '@wagmi/core';
 	import { config } from '$lib/services/wallet-config';
-	import { bvsRegistryConfig } from '$lib/contracts';
+	import { bvsRegistryConfig, bvsRegistryAddress } from '$lib/contracts';
 	import { fetchFromArweave } from '$lib/services/arweave';
 	import ContentUriLink from '$lib/components/ContentUriLink.svelte';
 	import { renderSectionedMarkdown } from '$lib/services/markdown';
@@ -10,6 +10,7 @@
 	import Tooltip from '$lib/components/Tooltip.svelte';
 	import { docTypeLabel, relationLabel, RELATION_AMENDS, RELATION_REVISES, RELATION_REPEALS, RELATION_CODIFIES } from '$lib/constants/docTypes';
 	import { formatDate, formatCountdown, stripFrontmatter } from '$lib/services/format';
+	import CiteButton from '$lib/components/CiteButton.svelte';
 
 	interface Reference {
 		registryAddress: string;
@@ -80,6 +81,7 @@
 	let loading = $state(true);
 	let error = $state('');
 	let selectedVersion = $state<{ categoryId: number; documentId: number; version: number } | null>(null);
+	const chainId = Number(import.meta.env.VITE_CHAIN_ID);
 	let copyLabel = $state('Copy');
 
 	// Reactive clock — drives lock-window countdown badges. One-minute
@@ -611,12 +613,23 @@
 																			</div>
 																			<div class="mt-3 pt-3 border-t border-border flex items-center justify-between">
 																				<span class="text-xs text-text-muted">Content URI: <ContentUriLink uri={ver.contentUri} /></span>
-																				<button
-																					onclick={copyMarkdown}
-																					class="text-xs px-3 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
-																				>
-																					{copyLabel}
-																				</button>
+																				<div class="flex items-center gap-2">
+																					<CiteButton
+																						title={ver.title}
+																						version={ver.version}
+																						contentHash={ver.contentHash}
+																						timestamp={ver.timestamp}
+																						registryAddress={bvsRegistryAddress}
+																						chainId={chainId}
+																						categoryName={cat.name}
+																					/>
+																					<button
+																						onclick={copyMarkdown}
+																						class="text-xs px-3 py-1 rounded border border-border hover:bg-bg-lighter text-text-muted hover:text-text transition-colors cursor-pointer"
+																					>
+																						{copyLabel}
+																					</button>
+																				</div>
 																			</div>
 																		{:else}
 																			<p class="text-text-secondary text-sm">
