@@ -237,6 +237,11 @@ export interface ProposalMetadata {
 	 *  were proposed. The /vote Approve flow signs a follow-up
 	 *  setAmendmentRestrictions tx using these values. */
 	restrictions: ProposalRestrictionMetadata | null;
+	// Target registry the addDocument call is aimed at (payload tx.to). The
+	// Snapshot X Space outlives any single registry deployment, so its proposal
+	// history spans every registry it ever governed; this lets callers keep
+	// only the proposals belonging to the registry the app currently points at.
+	target: string;
 }
 
 export interface ProposalInfo {
@@ -539,7 +544,8 @@ function decodeProposalPayload(payload: Hex): ProposalMetadata | null {
 			docType: Number(input.docType),
 			contentUri: input.contentUri,
 			contentHash: input.contentHash,
-			restrictions
+			restrictions,
+			target: tx.to
 		};
 	} catch {
 		return null;
@@ -823,9 +829,14 @@ export async function getProposals(): Promise<ProposalInfo[]> {
 			)
 		)
 	);
+	const currentRegistry = bvsRegistryAddress.toLowerCase();
 	const proposals: ProposalInfo[] = settled
 		.filter((r): r is PromiseFulfilledResult<ProposalInfo> => r.status === 'fulfilled')
-		.map((r) => r.value);
+		.map((r) => r.value)
+		.filter((p) =>
+			!p.metadata?.target ||
+			p.metadata.target.toLowerCase() === currentRegistry
+		);
 
 	return proposals;
 }
