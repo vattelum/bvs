@@ -37,7 +37,6 @@
 		VoteChoice,
 		statusLabel,
 		statusClass,
-		strategyLabel,
 		tallyBar,
 		votingContext,
 		votingContextClass,
@@ -85,7 +84,6 @@
 					<span class="font-mono text-text-muted text-xs">#{proposal.proposalId}</span>
 					<span class="text-sm font-medium {statusClass(proposal.status)}">{statusLabel(proposal.status)}</span>
 					<span class="text-xs {votingContextClass(proposal, totalSupply, quorums)}">{votingContext(proposal, totalSupply, quorums)}</span>
-					<span class="text-xs text-text-muted">{strategyLabel(proposal.executionStrategy)}</span>
 				</div>
 				<h3 class="text-base font-medium">{proposal.metadata?.title ?? `Proposal #${proposal.proposalId}`}</h3>
 				{#if proposal.documentLabel}

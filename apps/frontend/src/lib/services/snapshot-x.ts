@@ -1004,12 +1004,3 @@ export function votingContextClass(
 export function selectStrategy(): `0x${string}` {
 	return executionStrategyAddress;
 }
-
-/**
- * Label for the execution strategy. With a single strategy, this returns a
- * generic label — the page can show approval/quorum percentages from the
- * strategy contract if more detail is needed.
- */
-export function strategyLabel(_strategyAddress: string): string {
-	return 'Snapshot X';
-}
